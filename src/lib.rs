@@ -1,11 +1,17 @@
-use std::error::Error;
-use std::fmt;
-use std::fmt::Formatter;
+pub mod types;
+
+use chrono::{Date, Utc};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
-use serde::{Deserialize, Serialize};
 use serde_json::json;
+
+use types::*;
+
+/*
+ * Protocol docs:
+ *   https://github.com/softScheck/tplink-smartplug/blob/master/tplink-smarthome-commands.txt
+ */
 
 pub enum DeviceType {
     Plug,
@@ -59,132 +65,6 @@ fn decrypt_payload(data: &[u8]) -> Vec<u8> {
     }
 
     v2
-}
-
-#[derive(Clone, Default, Debug, PartialEq, Deserialize, Serialize)]
-pub struct SystemGetSysInfoResponse {
-    pub errcode: i64,
-    pub sw_ver: String,
-    pub hw_ver: String,
-    #[serde(rename = "type")]
-    pub hw_type: String,
-    pub model: String,
-    pub mac: String,
-    #[serde(rename = "deviceId")]
-    pub device_id: String,
-    #[serde(rename= "hwId")]
-    pub hw_id: String,
-    #[serde(rename = "fwId")]
-    pub fw_id: String,
-    #[serde(rename = "oemId")]
-    pub oem_id: String,
-    pub alias: String,
-    pub dev_name: String,
-    pub icon_hash: String,
-    pub relay_state: i64,
-    pub on_time: i64,
-    pub active_mode: String,
-    pub feature: String,
-    pub updating: i64,
-    pub rssi: i64,
-    pub led_off: i64,
-    pub latitude: f64,
-    pub longitude: f64,
-}
-
-#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
-pub struct SystemResponse {
-    pub get_sysinfo: SystemGetSysInfoResponse
-}
-
-#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
-pub struct EmeterGetRealtimeResponse {
-    pub current: Option<f64>,
-    pub current_ma: Option<f64>,
-    pub voltage: Option<f64>,
-    pub voltage_mv: Option<f64>,
-    pub power: Option<f64>,
-    pub power_mw: Option<f64>,
-    pub total: Option<f64>,
-    pub total_wh: Option<f64>,
-    pub err_code: i64,
-}
-
-impl fmt::Display for EmeterGetRealtimeResponse {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        if self.voltage_mv.is_none() {
-            write!(f, "V = {} V, I = {} A, P = {} W",
-                   self.voltage.unwrap() / 1000.0,
-                   self.current.unwrap() / 1000.0,
-                   self.power.unwrap() / 1000.0
-            )
-        } else {
-            write!(f, "V = {} V, I = {} A, P = {} W",
-                   self.voltage_mv.unwrap() / 1000.0,
-                   self.current_ma.unwrap() / 1000.0,
-                   self.power_mw.unwrap() / 1000.0
-            )
-        }
-    }
-}
-
-#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
-pub struct EmeterGetVGainIGainResponse {
-    pub vgain: i64,
-    pub igain: i64,
-    pub err_code: i64,
-}
-
-#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
-pub struct EmeterGetDaystatItem {
-    pub year: i64,
-    pub month: i64,
-    pub day: i64,
-    pub energy: f64,
-}
-
-#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
-pub struct EmeterGetDaystatResponse {
-    pub day_list: Vec<EmeterGetDaystatItem>,
-    pub err_code: i64,
-}
-
-#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
-pub struct EmeterResponse {
-    pub get_realtime: Option<EmeterGetRealtimeResponse>,
-    pub get_vgain_igain: Option<EmeterGetVGainIGainResponse>,
-    pub get_daystat: Option<EmeterGetDaystatResponse>
-}
-
-#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
-pub struct PlugResponse {
-    pub system: Option<SystemResponse>,
-    pub emeter: Option<EmeterResponse>
-}
-
-#[derive(Debug)]
-pub struct PlugError {
-    details: String
-}
-
-impl PlugError {
-    fn new(msg: &str) -> PlugError {
-        PlugError {
-            details: msg.to_string()
-        }
-    }
-}
-
-impl fmt::Display for PlugError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.details)
-    }
-}
-
-impl Error for PlugError {
-    fn description(&self) -> &str {
-        &self.details
-    }
 }
 
 pub struct TpLinkDevice {
@@ -252,10 +132,325 @@ impl TpLinkDevice {
         self.set_relay_state(0)
     }
 
-    pub fn get_realtime(&self) -> Result<PlugResponse, PlugError>{
+    pub fn get_realtime(&self) -> Result<PlugResponse, PlugError> {
         let v = json!({
             "emeter": {
                 "get_realtime": {}
+            }
+        });
+
+        send_command::<PlugResponse>(&self.ip, v.to_string())
+    }
+
+    pub fn reboot(&self) -> Result<PlugResponse, PlugError> {
+        let v = json!({
+            "system": {
+                "reboot": {
+                    "delay": 1
+                }
+            }
+        });
+
+        send_command::<PlugResponse>(&self.ip, v.to_string())
+    }
+
+    pub fn reset_to_factory(&self) -> Result<PlugResponse, PlugError> {
+        let v = json!({
+            "system": {
+                "reset": {
+                    "delay": 1
+                }
+            }
+        });
+
+        send_command::<PlugResponse>(&self.ip, v.to_string())
+    }
+
+    pub fn turn_led_off(&self) -> Result<PlugResponse, PlugError> {
+        let v = json!({
+            "system": {
+                "set_led_off": {
+                    "off": 1
+                }
+            }
+        });
+
+        send_command::<PlugResponse>(&self.ip, v.to_string())
+    }
+
+    pub fn set_device_alias(&self, name: &str) -> Result<PlugResponse, PlugError> {
+        let v = json!({
+            "system": {
+                "set_dev_alias": {
+                    "alias": name
+                }
+            }
+        });
+
+        send_command::<PlugResponse>(&self.ip, v.to_string())
+    }
+
+    pub fn set_mac_address(&self, mac: &str) -> Result<PlugResponse, PlugError> {
+        let v = json!({
+            "system": {
+                "set_mac_addr": {
+                    "mac": mac
+                }
+            }
+        });
+
+        send_command::<PlugResponse>(&self.ip, v.to_string())
+    }
+
+    pub fn set_device_id(&self, device_id: &str) -> Result<PlugResponse, PlugError> {
+        let v = json!({
+            "system": {
+                "set_device_id": {
+                    "deviceId": device_id
+                }
+            }
+        });
+
+        send_command::<PlugResponse>(&self.ip, v.to_string())
+    }
+
+    pub fn set_hardware_id(&self, hardware_id: &str) -> Result<PlugResponse, PlugError> {
+        let v = json!({
+            "system": {
+                "set_hw_id": {
+                    "hwId": hardware_id
+                }
+            }
+        });
+
+        send_command::<PlugResponse>(&self.ip, v.to_string())
+    }
+
+    pub fn set_location(&self, latitude: f64, longitude: f64) -> Result<PlugResponse, PlugError> {
+        let v = json!({
+            "system": {
+                "set_dev_location": {
+                    "longitude": longitude,
+                    "latitude": latitude,
+                }
+            }
+        });
+
+        send_command::<PlugResponse>(&self.ip, v.to_string())
+    }
+
+    pub fn uboot_bootloader_check(&self) -> Result<PlugResponse, PlugError> {
+        let v = json!({
+            "system": {
+                "test_check_uboot": null
+            }
+        });
+
+        send_command::<PlugResponse>(&self.ip, v.to_string())
+    }
+
+    pub fn get_device_icon(&self) -> Result<PlugResponse, PlugError> {
+        let v = json!({
+            "system": {
+                "get_dev_icon": null
+            }
+        });
+
+        send_command::<PlugResponse>(&self.ip, v.to_string())
+    }
+
+    pub fn set_device_icon(&self, icon: &str, hash: &str) -> Result<PlugResponse, PlugError> {
+        let v = json!({
+            "system": {
+                "set_dev_icon": {
+                    "icon": icon,
+                    "hash": hash,
+                }
+            }
+        });
+
+        send_command::<PlugResponse>(&self.ip, v.to_string())
+    }
+
+    pub fn set_test_mode(&self) -> Result<PlugResponse, PlugError> {
+        let v = json!({
+            "system": {
+                "set_test_mode": {
+                    "enable": 1
+                }
+            }
+        });
+
+        send_command::<PlugResponse>(&self.ip, v.to_string())
+    }
+
+    pub fn download_firmware_from_url(&self, url: &str) -> Result<PlugResponse, PlugError> {
+        let v = json!({
+            "system": {
+                "download_firmware": {
+                    "url": url
+                }
+            }
+        });
+
+        send_command::<PlugResponse>(&self.ip, v.to_string())
+    }
+
+    pub fn get_download_state(&self) -> Result<PlugResponse, PlugError> {
+        let v = json!({
+            "system": {
+                "get_download_state": {}
+            }
+        });
+
+        send_command::<PlugResponse>(&self.ip, v.to_string())
+    }
+
+    pub fn flash_downloaded_firmware(&self) -> Result<PlugResponse, PlugError> {
+        let v = json!({
+            "system": {
+                "flash_firmware": {}
+            }
+        });
+
+        send_command::<PlugResponse>(&self.ip, v.to_string())
+    }
+
+    pub fn check_config(&self) -> Result<PlugResponse, PlugError> {
+        let v = json!({
+            "system": {
+                "check_new_config": null
+            }
+        });
+
+        send_command::<PlugResponse>(&self.ip, v.to_string())
+    }
+
+    pub fn scan_available_aps(&self) -> Result<PlugResponse, PlugError> {
+        let v = json!({
+            "netif": {
+                "get_scaninfo": {
+                    "refresh": 1
+                }
+            }
+        });
+
+        send_command::<PlugResponse>(&self.ip, v.to_string())
+    }
+
+    pub fn connect_to_ap(&self, ssid: &str, password: &str)
+        -> Result<PlugResponse, PlugError> {
+
+        let v = json!({
+            "netif": {
+                "set_stainfo": {
+                    "ssid": ssid,
+                    "password": password,
+                    "key_type": 3
+                }
+            }
+        });
+
+        send_command::<PlugResponse>(&self.ip, v.to_string())
+    }
+
+    pub fn get_cloud_info(&self) -> Result<PlugResponse, PlugError> {
+        let v = json!({
+            "cnCloud": {
+                "get_info": null
+            }
+        });
+
+        send_command::<PlugResponse>(&self.ip, v.to_string())
+    }
+
+    pub fn get_firmware_list(&self) -> Result<PlugResponse, PlugError> {
+        let v = json!({
+            "cnCloud": {
+                "get_intl_fw_list": {}
+            }
+        });
+
+        send_command::<PlugResponse>(&self.ip, v.to_string())
+    }
+
+    pub fn set_server_url(&self, server_url: &str) -> Result<PlugResponse, PlugError> {
+        let v = json!({
+            "cnCloud": {
+                "set_server_url": {
+                    "server": server_url,
+                }
+            }
+        });
+
+        send_command::<PlugResponse>(&self.ip, v.to_string())
+    }
+
+    pub fn connect_to_cloud(&self, user: &str, password: &str) -> Result<PlugResponse, PlugError> {
+        let v = json!({
+            "cnCloud": {
+                "bind": {
+                    "username": user,
+                    "password": password,
+                }
+            }
+        });
+
+        send_command::<PlugResponse>(&self.ip, v.to_string())
+    }
+
+    pub fn unregister_device(&self) -> Result<PlugResponse, PlugError> {
+        let v = json!({
+            "cnCloud": {
+                "unbind": null
+            }
+        });
+
+        send_command::<PlugResponse>(&self.ip, v.to_string())
+    }
+
+    pub fn get_time(&self) -> Result<PlugResponse, PlugError> {
+        let v = json!({
+            "time": {
+                "get_time": null
+            }
+        });
+
+        send_command::<PlugResponse>(&self.ip, v.to_string())
+    }
+
+    pub fn get_timezone(&self) -> Result<PlugResponse, PlugError> {
+        let v = json!({
+            "time": {
+                "get_timezone": null
+            }
+        });
+
+        send_command::<PlugResponse>(&self.ip, v.to_string())
+    }
+
+    pub fn set_timezone(&self) -> Result<PlugResponse, PlugError> {
+        let v = json!({
+            "time": {
+                "set_timezone": {
+                    "year": 1,
+                    "month": 2,
+                    "mday": 3,
+                    "hour": 4,
+                    "min": 5,
+                    "sec": 6,
+                    "index": 42
+                }
+            }
+        });
+
+        send_command::<PlugResponse>(&self.ip, v.to_string())
+    }
+
+    pub fn get_meter_info(&self) -> Result<PlugResponse, PlugError> {
+        let v = json!({
+            "system": {
+                 "get_sysinfo": {}
             }
         });
 
@@ -276,16 +471,10 @@ impl TpLinkDevice {
 #[cfg(test)]
 mod tests {
     use std::io::{Read, Write};
-    use std::net::{TcpStream};
+    use std::net::TcpStream;
     use std::time::Duration;
-    use crate::{decrypt_payload, encrypt_payload, TpLinkDevice};
     use serde_json::json;
-
-    #[test]
-    fn it_works() {
-        let result = 2 + 2;
-        assert_eq!(result, 4);
-    }
+    use crate::{decrypt_payload, encrypt_payload, TpLinkDevice};
 
     #[test]
     fn test_encrypt_payload() {
